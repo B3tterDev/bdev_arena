@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Arena</title>
+    <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+
+<!-- ============================================================
+     MAIN WRAPPER — ซ่อนไว้ก่อน JS จะเปิด
+     ============================================================ -->
+<div id="arena-ui" class="hidden">
+
+    <!-- ============ HEADER ============ -->
+    <div class="header">
+        <span id="header-title">🏟️ ARENA</span>
+        <button class="close-btn" onclick="UI.close()">✕</button>
+    </div>
+
+    <!-- ============ LOBBY VIEW ============ -->
+    <div id="view-lobby" class="view active">
+
+        <!-- STATUS BAR -->
+        <div class="status-bar">
+            <span id="status-label">ไม่มีเกม</span>
+            <span id="pool-label" class="pool"></span>
+        </div>
+
+        <!-- HOST PANEL (สร้าง Lobby) -->
+        <div id="host-panel" class="panel card">
+            <h3>สร้าง Lobby (เป็น Host)</h3>
+            <div class="row">
+                <label>ทีมของคุณ</label>
+                <div class="team-selector">
+                    <button class="team-btn red-btn active" onclick="UI.selectTeam('red', this)">
+                        🔴 ทีมแดง
+                    </button>
+                    <button class="team-btn blue-btn" onclick="UI.selectTeam('blue', this)">
+                        🔵 ทีมน้ำเงิน
+                    </button>
+                </div>
+            </div>
+            <div class="row">
+                <label>ราคาเดิมพัน</label>
+                <div class="bet-selector" id="bet-btns"></div>
+                <input type="number" id="bet-custom" placeholder="หรือพิมพ์จำนวน..." min="5000" />
+            </div>
+            <div class="bet-preview">
+                <span>เดิมพัน: </span>
+                <span id="bet-display" class="highlight">$50,000</span>
+            </div>
+            <button class="action-btn confirm-btn" onclick="UI.createLobby()">
+                ✅ ยืนยันสร้าง Lobby
+            </button>
+        </div>
+
+        <!-- JOIN PANEL (เข้าร่วม) -->
+        <div id="join-panel" class="panel card hidden">
+            <h3>เข้าร่วมเกม</h3>
+            <div class="bet-info">
+                <span>ราคาเดิมพัน: </span>
+                <span id="join-bet" class="highlight red">$0</span>
+            </div>
+            <div class="team-slots">
+                <!-- Red Team -->
+                <div class="team-slot red-team">
+                    <div class="team-header red">🔴 ทีมแดง <span id="red-count">0/5</span></div>
+                    <div id="red-list" class="player-list"></div>
+                    <button class="team-join-btn red-join" onclick="UI.joinTeam('red')">
+                        เข้าทีมแดง
+                    </button>
+                </div>
+                <!-- Blue Team -->
+                <div class="team-slot blue-team">
+                    <div class="team-header blue">🔵 ทีมน้ำเงิน <span id="blue-count">0/5</span></div>
+                    <div id="blue-list" class="player-list"></div>
+                    <button class="team-join-btn blue-join" onclick="UI.joinTeam('blue')">
+                        เข้าทีมน้ำเงิน
+                    </button>
+                </div>
+            </div>
+            <!-- HOST ONLY: Start + Reset -->
+            <div id="host-controls" class="hidden">
+                <button id="start-btn" class="action-btn start-btn disabled" disabled onclick="UI.startGame()">
+                    ▶ START GAME
+                </button>
+                <button class="action-btn reset-btn" onclick="UI.resetArena()">
+                    ↩ ยกเลิก / Reset
+                </button>
+            </div>
+        </div>
+
+        <!-- REJOIN PANEL -->
+        <div id="rejoin-panel" class="panel card hidden">
+            <h3>❌ คุณถูกกำจัด</h3>
+            <p>กด Rejoin เพื่อกลับเข้าวง (Streak จะรีเซ็ต)</p>
+            <div class="row">
+                <button class="team-join-btn red-join" onclick="UI.rejoin('red')">🔴 Rejoin ทีมแดง</button>
+                <button class="team-join-btn blue-join" onclick="UI.rejoin('blue')">🔵 Rejoin ทีมน้ำเงิน</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ============ HUD OVERLAY (ระหว่างเกม) ============ -->
+    <div id="hud-bar" class="hud hidden">
+        <div class="hud-round">
+            <span>Round</span>
+            <span id="hud-round-num">1</span>/<span id="hud-round-total">3</span>
+        </div>
+        <div class="hud-scores">
+            <span class="hud-red">🔴 <span id="hud-red-score">0</span></span>
+            <span class="hud-vs">VS</span>
+            <span class="hud-blue"><span id="hud-blue-score">0</span> 🔵</span>
+        </div>
+        <div id="hud-streak" class="hud-streak hidden"></div>
+        <div id="hud-countdown" class="hud-countdown hidden"></div>
+    </div>
+
+    <!-- ============ RESULT OVERLAY ============ -->
+    <div id="result-overlay" class="result-overlay hidden">
+        <div class="result-card">
+            <div id="result-title" class="result-title">จบเกม!</div>
+            <div id="result-winner" class="result-winner"></div>
+            <div class="result-scores">
+                <div class="result-score red-score">
+                    🔴 <span id="result-red">0</span>
+                </div>
+                <div class="result-score blue-score">
+                    🔵 <span id="result-blue">0</span>
+                </div>
+            </div>
+            <div id="result-pool" class="result-pool"></div>
+        </div>
+    </div>
+
+    <!-- ============ NOTIFICATION ============ -->
+    <div id="notification-area"></div>
+
+</div><!-- /#arena-ui -->
+
+<script src="js/ui.js"></script>
+</body>
+</html>
