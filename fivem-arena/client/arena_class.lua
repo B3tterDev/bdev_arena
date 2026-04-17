@@ -35,12 +35,14 @@ end
 --- อัพเดทสถานะจาก server
 ---@param data table
 function ArenaClass:ApplyState(data)
-    self.state     = data.state or 'idle'
+    self.state     = data.state    or 'idle'
     self.betAmount = data.betAmount or 0
-    self.round     = data.round or 0
-    self.scores    = data.scores or { red = 0, blue = 0 }
-    self.streaks   = data.streaks or {}
+    self.round     = data.round    or 0
+    self.scores    = data.scores   or { red = 0, blue = 0 }
+    self.streaks   = data.streaks  or {}
     self.hostId    = data.host
+    self.hostName  = data.hostName
+    self.hostTeam  = data.hostTeam
     self.teamRed   = data.teamRed  or {}
     self.teamBlue  = data.teamBlue or {}
 
