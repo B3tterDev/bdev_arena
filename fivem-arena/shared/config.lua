@@ -3,47 +3,62 @@ Config = {}
 -- ============================================================
 --  ARENA SETTINGS
 -- ============================================================
-Config.MaxPlayersPerTeam = 5           -- ผู้เล่นสูงสุดต่อทีม
-Config.TotalRounds      = 3            -- จำนวน Round ต่อเกม
-Config.RoundDuration    = 300          -- วินาที ต่อ Round (5 นาที)
-Config.BetAmounts       = { 10000, 25000, 50000, 100000, 250000 } -- ตัวเลือกราคาเดิมพัน
-Config.DefaultBet       = 50000        -- ค่า default ถ้า Host ไม่เลือก
-Config.MinBet           = 5000         -- เดิมพันขั้นต่ำ
-Config.MaxBet           = 1000000      -- เดิมพันสูงสุด
+Config.MaxPlayersPerTeam = 5
+Config.TotalRounds       = 3
+Config.RoundDuration     = 300          -- วินาที/Round (5 นาที)
+Config.BetAmounts        = { 10000, 25000, 50000, 100000, 250000 }
+Config.DefaultBet        = 50000
+Config.MinBet            = 5000
+Config.MaxBet            = 1000000
 
 -- ============================================================
 --  TEAM DEFINITION
 -- ============================================================
 Config.Teams = {
-    red  = { id = 'red',  label = 'ทีมแดง',   color = '#e74c3c', spawnIndex = 1 },
-    blue = { id = 'blue', label = 'ทีมน้ำเงิน', color = '#2980b9', spawnIndex = 2 },
+    red  = { id = 'red',  label = 'ทีมแดง',    color = '#e74c3c', oxColor = 'red'  },
+    blue = { id = 'blue', label = 'ทีมน้ำเงิน', color = '#2980b9', oxColor = 'blue' },
 }
 
 -- ============================================================
---  ARENA ZONE  (ศูนย์กลางวง)
---  แก้ไข x,y,z และ radius ให้ตรงกับแผนที่เซิร์ฟเวอร์ของคุณ
+--  ARENA ZONE  (วงต่อสู้)
+--  แก้ x,y,z และ radius ให้ตรงกับแผนที่ของเซิร์ฟเวอร์
 -- ============================================================
 Config.ArenaCenter = vector3(-414.0, -2057.0, 13.0)
-Config.ArenaRadius  = 30.0             -- รัศมีของวง (เมตร)
+Config.ArenaRadius  = 30.0
 
--- Spawn points ของแต่ละทีม (ภายในหรือบริเวณวง)
 Config.SpawnPoints = {
     red  = vector4(-420.0, -2057.0, 13.0, 90.0),
     blue = vector4(-408.0, -2057.0, 13.0, 270.0),
 }
 
 -- ============================================================
---  LOBBY ZONE  (บริเวณกดเข้าร่วม)
+--  LOBBY ZONES  (Polygon — แยกแดง/น้ำเงิน)
+--  ใช้ ox_lib Poly Zone — แต่ละทีมมีวงของตัวเอง
 -- ============================================================
-Config.LobbyCenter = vector3(-414.0, -2070.0, 13.0)
-Config.LobbyRadius  = 5.0
+Config.RedLobby = {
+    points = {
+        vec3(194.0,           -886.70001220703, 25.0),
+        vec3(190.75,          -885.5,           25.0),
+        vec3(191.89999389648, -882.25,           25.0),
+        vec3(195.19999694824, -883.45001220703, 25.0),
+    },
+    thickness = 5.5,
+}
+
+Config.BlueLobby = {
+    points = {
+        vec3(204.85000610352, -890.65002441406, 25.0),
+        vec3(206.0,           -887.40002441406, 25.0),
+        vec3(209.30000305176, -888.59997558594, 25.0),
+        vec3(208.10000610352, -891.84997558594, 25.0),
+    },
+    thickness = 5.5,
+}
+
+-- จุด Teleport หลังแพ้ (กลางระหว่าง 2 Lobby)
+Config.EjectPoint = vector3(200.0, -887.0, 25.0)
 
 -- ============================================================
---  ESX / QBCore FRAMEWORK
+--  FRAMEWORK
 -- ============================================================
 Config.Framework = 'esx'   -- 'esx' | 'qbcore' | 'standalone'
-
--- ============================================================
---  UI KEYS
--- ============================================================
-Config.KeyOpenMenu = 38  -- E
