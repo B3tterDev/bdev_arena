@@ -7,29 +7,35 @@
 ArenaManager = {}
 ArenaManager.__index = ArenaManager
 
--- สถานะของ Arena
+-- ============================================================
+--  STATE MACHINE
+--  idle → claiming → lobby → ready → playing → ended → idle
+-- ============================================================
 local STATE = {
-    IDLE    = 'idle',      -- รอ Host
-    LOBBY   = 'lobby',     -- รอผู้เล่นเข้า
-    READY   = 'ready',     -- ผู้เล่นครบ รอ Host กด Start
-    PLAYING = 'playing',   -- กำลังแข่ง
-    ENDED   = 'ended',     -- จบเกม
+    IDLE     = 'idle',      -- ไม่มีใครในวง
+    CLAIMING = 'claiming',  -- คนแรกเดินเข้า รอตั้ง Bet
+    LOBBY    = 'lobby',     -- Host ตั้ง Bet แล้ว รอผู้เล่น
+    READY    = 'ready',     -- ผู้เล่นครบ รอ Host กด Start
+    PLAYING  = 'playing',   -- กำลังแข่ง
+    ENDED    = 'ended',     -- จบเกม
 }
 
---- สร้าง instance ใหม่
----@return ArenaManager
+-- ============================================================
+--  CONSTRUCTOR
+-- ============================================================
 function ArenaManager:New()
     local obj = setmetatable({}, ArenaManager)
-    obj.state       = STATE.IDLE
-    obj.host        = nil          -- serverId ของ Host
-    obj.hostTeam    = nil          -- 'red' | 'blue'
-    obj.betAmount   = Config.DefaultBet
-    obj.teams       = { red = {}, blue = {} }
-    obj.round       = 0
-    obj.scores      = { red = 0, blue = 0 }
-    obj.streaks     = {}           -- { [serverId] = streak }
-    obj.bank        = BankClass:New()
-    obj.roundTimer  = nil
+    obj.state      = STATE.IDLE
+    obj.host       = nil       -- serverId ของ Host
+    obj.hostName   = nil       -- ชื่อ Host
+    obj.hostTeam   = nil       -- 'red' | 'blue'
+    obj.betAmount  = 0
+    obj.teams      = { red = {}, blue = {} }
+    obj.round      = 0
+    obj.scores     = { red = 0, blue = 0 }
+    obj.streaks    = {}
+    obj.bank       = BankClass:New()
+    obj.roundTimer = nil
     return obj
 end
 
@@ -47,7 +53,7 @@ function ArenaManager:_GetTeamOf(serverId)
 end
 
 function ArenaManager:_TeamCount(teamId)
-    return #self.teams[teamId]
+    return #(self.teams[teamId] or {})
 end
 
 function ArenaManager:_RemoveFromTeam(serverId)
@@ -62,24 +68,12 @@ function ArenaManager:_RemoveFromTeam(serverId)
 end
 
 function ArenaManager:_AllPlayersReady()
-    return #self.teams.red == Config.MaxPlayersPerTeam
-        and #self.teams.blue == Config.MaxPlayersPerTeam
+    return #self.teams.red  == Config.MaxPlayersPerTeam
+       and #self.teams.blue == Config.MaxPlayersPerTeam
 end
 
 function ArenaManager:_BroadcastState()
-    local data = {
-        state      = self.state,
-        host       = self.host,
-        hostTeam   = self.hostTeam,
-        betAmount  = self.betAmount,
-        teamRed    = self.teams.red,
-        teamBlue   = self.teams.blue,
-        round      = self.round,
-        scores     = self.scores,
-        streaks    = self.streaks,
-        pool       = self.bank:GetPool(),
-    }
-    TriggerClientEvent('arena:stateUpdate', -1, data)
+    TriggerClientEvent('arena:stateUpdate', -1, self:GetState())
 end
 
 function ArenaManager:_StopRoundTimer()
@@ -90,53 +84,108 @@ function ArenaManager:_StopRoundTimer()
 end
 
 -- ============================================================
---  PUBLIC API
+--  HOST CLAIMING  (คนแรกเดินเข้าวง)
 -- ============================================================
 
---- Host กดสร้าง Lobby
+--- คนแรกที่เดินเข้าวงใดวงหนึ่ง claim เป็น Host ทันที
 ---@param serverId number
----@param teamId   string
----@param betAmount number
+---@param teamId   string  'red' | 'blue'
 ---@return boolean, string
-function ArenaManager:CreateLobby(serverId, teamId, betAmount)
+function ArenaManager:ClaimHost(serverId, teamId)
+    -- ยอมรับเฉพาะตอน IDLE
     if self.state ~= STATE.IDLE then
-        return false, 'มีเกมกำลังดำเนินอยู่'
+        return false, 'มีผู้เล่นอยู่ในห้องแล้ว'
     end
     if not Config.Teams[teamId] then
-        return false, 'ไม่พบทีมที่ระบุ'
+        return false, 'ทีมไม่ถูกต้อง'
+    end
+
+    self.state    = STATE.CLAIMING
+    self.host     = serverId
+    self.hostName = GetPlayerName(serverId) or ('Player ' .. serverId)
+    self.hostTeam = teamId
+
+    self:_BroadcastState()
+    print(string.format('[ARENA] Player %d (%s) claimed host — team: %s',
+        serverId, self.hostName, teamId))
+    return true, 'คุณเป็น Host! กรุณาตั้งราคาเดิมพัน'
+end
+
+--- Host ยกเลิก (ออกจากวงก่อนตั้ง Bet)
+---@param serverId number
+function ArenaManager:CancelClaim(serverId)
+    if self.state ~= STATE.CLAIMING then return end
+    if serverId ~= self.host         then return end
+
+    self.state    = STATE.IDLE
+    self.host     = nil
+    self.hostName = nil
+    self.hostTeam = nil
+    self:_BroadcastState()
+    print(string.format('[ARENA] Player %d cancelled host claim', serverId))
+end
+
+-- ============================================================
+--  SET BET  (Host ตั้งราคาหลัง claim)
+-- ============================================================
+
+--- Host กรอก Bet จาก inputDialog
+---@param serverId  number
+---@param betAmount number
+---@return boolean, string
+function ArenaManager:SetHostBet(serverId, betAmount)
+    if self.state ~= STATE.CLAIMING then
+        return false, 'ไม่อยู่ในสถานะตั้งเดิมพัน'
+    end
+    if serverId ~= self.host then
+        return false, 'เฉพาะ Host เท่านั้นที่ตั้งเดิมพันได้'
     end
     if betAmount < Config.MinBet or betAmount > Config.MaxBet then
-        return false, string.format('เดิมพันต้องอยู่ระหว่าง %s - %s',
+        return false, string.format('เดิมพันต้องอยู่ระหว่าง %s – %s',
             Utils.FormatMoney(Config.MinBet), Utils.FormatMoney(Config.MaxBet))
     end
 
-    self.state     = STATE.LOBBY
-    self.host      = serverId
-    self.hostTeam  = teamId
+    -- เปลี่ยนเป็น LOBBY
     self.betAmount = betAmount
     self.teams     = { red = {}, blue = {} }
     self.round     = 0
     self.scores    = { red = 0, blue = 0 }
     self.streaks   = {}
     self.bank      = BankClass:New()
+    self.state     = STATE.LOBBY
 
-    -- Host Join อัตโนมัติ
-    self:JoinTeam(serverId, teamId, true)
-    print(string.format('[ARENA] Lobby created by player %d (team: %s, bet: $%d)', serverId, teamId, betAmount))
-    return true, 'สร้าง Lobby สำเร็จ'
+    -- Host join ทีมของตัวเองอัตโนมัติ (หักเงินด้วย)
+    local ok, msg = self:JoinTeam(serverId, self.hostTeam, true)
+    if not ok then
+        -- เงินไม่พอ reset
+        self.state    = STATE.IDLE
+        self.host     = nil
+        self.hostName = nil
+        self.hostTeam = nil
+        self:_BroadcastState()
+        return false, msg
+    end
+
+    print(string.format('[ARENA] Lobby open — Host: %s | Team: %s | Bet: $%d',
+        self.hostName, self.hostTeam, betAmount))
+    return true, string.format('เปิด Lobby! เดิมพัน %s', Utils.FormatMoney(betAmount))
 end
 
---- ผู้เล่นเข้าร่วมทีม
+-- ============================================================
+--  JOIN TEAM
+-- ============================================================
+
+--- ผู้เล่นเข้าร่วมทีม (หักเงินทันที)
 ---@param serverId number
 ---@param teamId   string
----@param isHost   boolean|nil
+---@param skipStateCheck boolean|nil  ใช้ใน JoinTeam ที่เรียกจาก SetHostBet
 ---@return boolean, string
-function ArenaManager:JoinTeam(serverId, teamId, isHost)
-    if self.state ~= STATE.LOBBY then
+function ArenaManager:JoinTeam(serverId, teamId, skipStateCheck)
+    if not skipStateCheck and self.state ~= STATE.LOBBY then
         return false, 'ไม่สามารถเข้าร่วมได้ในขณะนี้'
     end
     if not Config.Teams[teamId] then
-        return false, 'ไม่พบทีมที่ระบุ'
+        return false, 'ทีมไม่ถูกต้อง'
     end
     if self:_GetTeamOf(serverId) then
         return false, 'คุณอยู่ในทีมแล้ว'
@@ -146,7 +195,6 @@ function ArenaManager:JoinTeam(serverId, teamId, isHost)
             Utils.GetTeamLabel(teamId), Config.MaxPlayersPerTeam, Config.MaxPlayersPerTeam)
     end
 
-    -- หักเงิน (ยกเว้น host ถ้าหักไปแล้ว) — ทุกคนโดน หัก ณ จุด join
     local ok = self.bank:Deduct(serverId, self.betAmount)
     if not ok then
         return false, string.format('เงินไม่พอ ต้องการ %s', Utils.FormatMoney(self.betAmount))
@@ -155,7 +203,6 @@ function ArenaManager:JoinTeam(serverId, teamId, isHost)
     table.insert(self.teams[teamId], serverId)
     self.streaks[serverId] = 0
 
-    -- เช็คว่าครบหรือยัง
     if self:_AllPlayersReady() then
         self.state = STATE.READY
     end
@@ -166,7 +213,10 @@ function ArenaManager:JoinTeam(serverId, teamId, isHost)
     return true, string.format('เข้าร่วม %s สำเร็จ!', Utils.GetTeamLabel(teamId))
 end
 
---- Host กด Start
+-- ============================================================
+--  START GAME  (Host only)
+-- ============================================================
+
 ---@param serverId number
 ---@return boolean, string
 function ArenaManager:StartGame(serverId)
@@ -185,11 +235,13 @@ function ArenaManager:StartGame(serverId)
     return true, 'เกมเริ่มแล้ว!'
 end
 
---- เริ่ม Round ปัจจุบัน
+-- ============================================================
+--  ROUND LOGIC
+-- ============================================================
+
 function ArenaManager:_StartRound()
     self:_StopRoundTimer()
 
-    -- เรียก client spawn ผู้เล่น
     for _, sid in ipairs(self.teams.red) do
         TriggerClientEvent('arena:spawnInArena', sid, 'red', self.round)
     end
@@ -198,117 +250,90 @@ function ArenaManager:_StartRound()
     end
 
     TriggerClientEvent('arena:roundStart', -1, {
-        round     = self.round,
-        duration  = Config.RoundDuration,
-        scores    = self.scores,
-        streaks   = self.streaks,
+        round    = self.round,
+        duration = Config.RoundDuration,
+        scores   = self.scores,
+        streaks  = self.streaks,
     })
     print(string.format('[ARENA] Round %d/%d started', self.round, Config.TotalRounds))
 
-    -- ตั้ง Timer หมดเวลา
     self.roundTimer = setTimeout(Config.RoundDuration * 1000, function()
         self:_OnRoundTimeout()
     end)
 end
 
---- เมื่อผู้เล่นตาย
----@param deadId    number  serverId ผู้ตาย
----@param killerId  number  serverId ผู้ฆ่า
+--- ผู้เล่นตาย
+---@param deadId   number
+---@param killerId number|nil
 function ArenaManager:OnPlayerDied(deadId, killerId)
     if self.state ~= STATE.PLAYING then return end
 
     local deadTeam   = self:_GetTeamOf(deadId)
-    local killerTeam = self:_GetTeamOf(killerId)
-
     if not deadTeam then return end
 
-    -- อัพ Streak ผู้ชนะ
-    if killerId and killerTeam and killerTeam ~= deadTeam then
-        self.streaks[killerId] = (self.streaks[killerId] or 0) + 1
-        local killerStreak = self.streaks[killerId]
-        TriggerClientEvent('arena:streakUpdate', killerId, killerStreak)
-        print(string.format('[ARENA] Player %d streak: %d', killerId, killerStreak))
+    -- Streak ผู้ฆ่า
+    if killerId and killerId ~= deadId then
+        local killerTeam = self:_GetTeamOf(killerId)
+        if killerTeam and killerTeam ~= deadTeam then
+            self.streaks[killerId] = (self.streaks[killerId] or 0) + 1
+            TriggerClientEvent('arena:streakUpdate', killerId, self.streaks[killerId])
+            print(string.format('[ARENA] Player %d streak: %d', killerId, self.streaks[killerId]))
+        end
     end
 
     -- รีเซ็ต Streak ผู้ตาย
     self.streaks[deadId] = 0
 
-    -- เด้ง ผู้ตายออกจากวง
-    TriggerClientEvent('arena:eliminated', deadId, { reason = 'eliminated' })
-
-    -- ลบออกจากทีม (ต้อง rejoin ใหม่)
+    -- เด้งออก
+    TriggerClientEvent('arena:eliminated', deadId, {})
     self:_RemoveFromTeam(deadId)
-
-    -- ตรวจเช็ค Round จบหรือยัง
     self:_CheckRoundEnd()
 end
 
---- ตรวจสอบว่า Round จบหรือยัง (ทีมใดทีมหนึ่งหมดผู้เล่น)
 function ArenaManager:_CheckRoundEnd()
-    local redAlive  = #self.teams.red
-    local blueAlive = #self.teams.blue
+    local r = #self.teams.red
+    local b = #self.teams.blue
 
-    if redAlive == 0 and blueAlive == 0 then
-        -- เสมอ ไม่บวกแต้ม
+    if r == 0 and b == 0 then
         self:_EndRound(nil)
-    elseif redAlive == 0 then
+    elseif r == 0 then
         self.scores.blue = self.scores.blue + 1
         self:_EndRound('blue')
-    elseif blueAlive == 0 then
+    elseif b == 0 then
         self.scores.red = self.scores.red + 1
         self:_EndRound('red')
     end
-    -- ยังมีผู้เล่นทั้งสองทีม → เล่นต่อ
 end
 
---- เมื่อ Round หมดเวลา
 function ArenaManager:_OnRoundTimeout()
-    local redAlive  = #self.teams.red
-    local blueAlive = #self.teams.blue
-
-    if redAlive > blueAlive then
-        self.scores.red = self.scores.red + 1
-        self:_EndRound('red')
-    elseif blueAlive > redAlive then
-        self.scores.blue = self.scores.blue + 1
-        self:_EndRound('blue')
-    else
-        self:_EndRound(nil) -- เสมอ
+    local r = #self.teams.red
+    local b = #self.teams.blue
+    if     r > b then self.scores.red  = self.scores.red  + 1; self:_EndRound('red')
+    elseif b > r then self.scores.blue = self.scores.blue + 1; self:_EndRound('blue')
+    else               self:_EndRound(nil)
     end
 end
 
---- จบ Round
 ---@param winnerTeam string|nil
 function ArenaManager:_EndRound(winnerTeam)
     self:_StopRoundTimer()
-
     local label = winnerTeam and Utils.GetTeamLabel(winnerTeam) or 'เสมอ'
-    print(string.format('[ARENA] Round %d ended — Winner: %s (Red:%d Blue:%d)',
+    print(string.format('[ARENA] Round %d ended — %s (🔴%d 🔵%d)',
         self.round, label, self.scores.red, self.scores.blue))
 
     TriggerClientEvent('arena:roundEnd', -1, {
-        round       = self.round,
-        winnerTeam  = winnerTeam,
-        scores      = self.scores,
-        streaks     = self.streaks,
+        round      = self.round,
+        winnerTeam = winnerTeam,
+        scores     = self.scores,
+        streaks    = self.streaks,
     })
 
-    -- รีเซ็ตทีมให้กลับมา (ผู้ที่รอดจาก Round ไม่ต้อง rejoin)
-    -- ผู้ที่ถูกเด้งออกไปแล้วจะต้องกด rejoin ใหม่เอง
-    -- ไม่มีการล้างทีมที่เหลืออยู่ — ผู้ชนะอยู่ในสนามต่อ
-
     if self.round >= Config.TotalRounds then
-        -- หน่วงเล็กน้อยแล้วจบเกม
-        setTimeout(5000, function()
-            self:_EndGame()
-        end)
+        setTimeout(5000, function() self:_EndGame() end)
     else
-        -- รอผู้แพ้ Rejoin แล้วเริ่ม Round ถัดไป
         setTimeout(10000, function()
             self.round = self.round + 1
-            self.state = STATE.LOBBY  -- เปิดให้ rejoin
-
-            -- เช็คทันทีว่าครบหรือเปล่า (กรณีผู้ชนะเต็มทีมอยู่แล้ว)
+            self.state = STATE.LOBBY
             if self:_AllPlayersReady() then
                 self.state = STATE.READY
             end
@@ -318,7 +343,10 @@ function ArenaManager:_EndRound(winnerTeam)
     end
 end
 
---- ผู้แพ้กด Rejoin กลับเข้าวง
+-- ============================================================
+--  REJOIN  (ผู้แพ้ rejoin หลัง round จบ)
+-- ============================================================
+
 ---@param serverId number
 ---@param teamId   string
 ---@return boolean, string
@@ -333,54 +361,44 @@ function ArenaManager:Rejoin(serverId, teamId)
         return false, string.format('%s เต็มแล้ว', Utils.GetTeamLabel(teamId))
     end
 
-    -- หักเงินรอบใหม่
     local ok = self.bank:Deduct(serverId, self.betAmount)
     if not ok then
         return false, string.format('เงินไม่พอ Rejoin ต้องการ %s', Utils.FormatMoney(self.betAmount))
     end
 
     table.insert(self.teams[teamId], serverId)
-    self.streaks[serverId] = 0  -- รีเซ็ต Streak
+    self.streaks[serverId] = 0
 
     if self:_AllPlayersReady() then
         self.state = STATE.READY
-        -- auto-start ถ้ามี host ยังอยู่
         if self.host and self:_GetTeamOf(self.host) then
             self:StartGame(self.host)
         end
     end
 
     self:_BroadcastState()
-    return true, 'Rejoin สำเร็จ! Streak ถูกรีเซ็ต'
+    return true, 'Rejoin สำเร็จ! Streak รีเซ็ต'
 end
 
---- จบเกม
+-- ============================================================
+--  END GAME
+-- ============================================================
+
 function ArenaManager:_EndGame()
     self.state = STATE.ENDED
 
-    -- ตัดสิน Winner Team
     local winnerTeam
-    if self.scores.red > self.scores.blue then
-        winnerTeam = 'red'
-    elseif self.scores.blue > self.scores.red then
-        winnerTeam = 'blue'
-    else
-        winnerTeam = nil -- เสมอ
+    if     self.scores.red  > self.scores.blue then winnerTeam = 'red'
+    elseif self.scores.blue > self.scores.red  then winnerTeam = 'blue'
     end
 
-    -- แจกเงิน
-    local winnerIds = {}
-    if winnerTeam then
-        winnerIds = self.teams[winnerTeam]
-    end
-
+    local winnerIds = winnerTeam and self.teams[winnerTeam] or {}
     if #winnerIds > 0 then
         self.bank:Distribute(winnerIds)
     else
         self.bank:RefundAll()
     end
 
-    -- สรุปผล broadcast
     TriggerClientEvent('arena:gameEnd', -1, {
         winnerTeam = winnerTeam,
         scores     = self.scores,
@@ -388,48 +406,50 @@ function ArenaManager:_EndGame()
         pool       = self.bank:GetPool(),
     })
 
-    print(string.format('[ARENA] Game ended! Winner: %s (Red:%d Blue:%d)',
+    print(string.format('[ARENA] Game ended! Winner: %s (🔴%d 🔵%d)',
         winnerTeam or 'Draw', self.scores.red, self.scores.blue))
 
-    -- Reset หลัง 15 วิ
-    setTimeout(15000, function()
-        self:Reset()
-    end)
+    setTimeout(15000, function() self:Reset() end)
 end
 
---- ยกเลิก / Reset
+-- ============================================================
+--  RESET
+-- ============================================================
+
 function ArenaManager:Reset()
     self:_StopRoundTimer()
-    if self.bank then
-        self.bank:RefundAll()
-    end
+    if self.bank then self.bank:RefundAll() end
     self.state     = STATE.IDLE
     self.host      = nil
+    self.hostName  = nil
     self.hostTeam  = nil
-    self.betAmount = Config.DefaultBet
+    self.betAmount = 0
     self.teams     = { red = {}, blue = {} }
     self.round     = 0
     self.scores    = { red = 0, blue = 0 }
     self.streaks   = {}
     self.bank      = BankClass:New()
     self.roundTimer = nil
-    TriggerClientEvent('arena:stateUpdate', -1, { state = STATE.IDLE })
+    self:_BroadcastState()
     print('[ARENA] Arena reset.')
 end
 
---- Get สถานะปัจจุบัน
----@return table
+-- ============================================================
+--  GET STATE  (snapshot สำหรับส่ง client)
+-- ============================================================
+
 function ArenaManager:GetState()
     return {
-        state      = self.state,
-        host       = self.host,
-        hostTeam   = self.hostTeam,
-        betAmount  = self.betAmount,
-        teamRed    = self.teams.red,
-        teamBlue   = self.teams.blue,
-        round      = self.round,
-        scores     = self.scores,
-        streaks    = self.streaks,
-        pool       = self.bank:GetPool(),
+        state     = self.state,
+        host      = self.host,
+        hostName  = self.hostName,
+        hostTeam  = self.hostTeam,
+        betAmount = self.betAmount,
+        teamRed   = self.teams.red,
+        teamBlue  = self.teams.blue,
+        round     = self.round,
+        scores    = self.scores,
+        streaks   = self.streaks,
+        pool      = self.bank:GetPool(),
     }
 end
